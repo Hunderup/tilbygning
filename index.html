@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="da">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tilbygning – Procesguide</title>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700;900&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #FBF7F1; color: #1E1A16; font-family: 'DM Sans', sans-serif; font-weight: 300; }
+  input[type=date] { font-family: 'DM Sans', sans-serif; }
+  ::-webkit-scrollbar { width: 6px; } ::-webkit-scrollbar-track { background: #f1f1f1; } ::-webkit-scrollbar-thumb { background: #C4925A; border-radius: 3px; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel">
+const { useState, useEffect, useCallback, useMemo } = React;
+
+const STORAGE_KEY = "tilbygning-v2";
+
+const SKIP_DATES = new Set([
+  "2025-04-02","2025-04-03","2025-04-04","2025-04-05","2025-04-06",
+  "2025-05-29",
+]);
+
+function isWorkday(d) {
+  const dow = d.getDay();
+  if (dow === 0 || dow === 6) return false;
+  return !SKIP_DATES.has(d.toISOString().slice(0, 10));
+}
+function addWorkdays(startDate, days) {
+  let d = new Date(startDate); let count = 0;
+  while (count < days - 1) { d.setDate(d.getDate() + 1); if (isWorkday(d)) count++; }
+  return d;
+}
+function nextWorkday(d) {
+  let nd = new Date(d);
+  while (!isWorkday(nd)) nd.setDate(nd.getDate() + 1);
+  return nd;
+}
+function dayAfter(d) {
+  let nd = new Date(d); nd.setDate(nd.getDate() + 1); return nextWorkday(nd);
+}
+function fmtDate(d) {
+  if (!d) return "";
+  const months = ["jan","feb","mar","apr","maj","jun","jul","aug","sep","okt","nov","dec"];
+  return `${d.getDate()}. ${months[d.getMonth()]}`;
+}
+function parseDate(str) {
+  if (!str) return null;
+  const [y, m, d] = str.split("-").map(Number);
+  return new Date(y, m - 1, d);
+}
+function toInputDate(d) {
+  if (!d) return "";
+  const yr = d.getFullYear();
+  const mo = String(d.getMonth()+1).padStart(2,"0");
+  const dy = String(d.getDate()).padStart(2,"0");
+  return `${yr}-${mo}-${dy}`;
+}
+
+const PHASE_DEFS = [
+  { id:1, icon:"📋", title:"Projektering & tilladelser", workdays:null, highlight:true, staticDate:"✓ Godkendt",
+    desc:"Inden første spadestik skal papirerne være i orden. Kommunen skal godkende byggesagen, og arkitekt/ingeniør tegner konstruktionsplaner.",
+    tip:"Du må ikke begynde at bygge, før tilladelsen er i hus. Sagsbehandlingstiden varierer fra 4 til 12 uger afhængigt af kommune.", tipLabel:"Husk:",
+    steps:["Engagér arkitekt eller byggerådgiver","Tegninger og konstruktionsberegninger udarbejdes","Byggetilladelse ansøges hos kommunen","Evt. nabohøring og BBR-oplysninger tjekkes"] },
+  { id:2, icon:"🚧", title:"Forberedelse & afsætning", workdays:1,
+    desc:"Byggepladsen klargøres, og tilbygningens placering afsættes præcist på grunden.",
+    steps:["Opstilling af byggepladsafskærmning og skurby","Afsætning af hjørner og fundamentlinje med stænger og snor","Tjek af eksisterende ledninger og rør i jorden (ledningsejer.dk)","Evt. flytning af beplantning eller fliser"] },
+  { id:3, icon:"⛏️", title:"Udgravning & jordarbejde", workdays:3,
+    desc:"Graven til fundament udgraves med gravemaskine. Bortskaffelse af overskudsjord arrangeres.",
+    tip:"I Danmark regnes normalt med minimum 90 cm for at undgå frostsprængning af fundamentet.", tipLabel:"Frostfri dybde:",
+    steps:["Udgravning til frostfri dybde (typisk 90 cm i DK)","Planering og komprimering af bunden","Udlægning af drænlag (fx stabilgrus)","Evt. dræn ved høj grundvandsstand"] },
+  { id:4, icon:"🏗️", title:"Fundament & sokkel", workdays:10, dividerBefore:"Råbygning",
+    desc:"Fundamentet udgør bygningens bærende base. Her støbes enten et strip-fundament langs ydervægge eller en hel betondæk/sokkelplade.",
+    steps:["Forskalning af fundament","Armering lægges ned","Betonudstøbning og hærdning (min. 7 dage)","Sokkelmur mures op til terrænniveau","Fugtspærre monteres på sokkeloverside"] },
+  { id:5, icon:"🧱", title:"Ydervægge", workdays:12,
+    desc:"Tilbygningens ydre skalmur rejses. De fleste danske tilbygninger opføres i tegl, letbeton eller træskeletkonstruktion.",
+    note:"NB: Håndværkernes påskeferie 2.–6. april er indregnet.",
+    tip:"Forbindelsen til huset er et kritisk punkt – her kræves normalt en ståldrager for at bære den eksisterende konstruktion.", tipLabel:"Forbindelsen til huset:",
+    steps:["Murværk i to skaller (teglsten + isolering + indvendig skal)","– eller træskeletkonstruktion med vindspærre udvendigt","Vindueshul og dørhul indmures/monteres","Gennembrydning til eksisterende hus ved åbningen","Evt. ståldrager over åbning (statiker bestemmer dimensioner)"] },
+  { id:6, icon:"🏠", title:"Tagkonstruktion & tagdækning", workdays:8,
+    desc:"Taget lukker bygningen til og beskytter mod vejret.",
+    steps:["Tagspær og remme monteres","Undertag (banevare) lægges som regnspærre","Lægter lægges til tagsten/tagplader","Tagdækning lægges (tegl, betonsten, tagpap eller zink)","Tagrender og nedløb monteres"] },
+  { id:7, icon:"🪟", title:"Vinduer, døre & facadeisolering", workdays:5, dividerBefore:"Indvendigt arbejde",
+    desc:'Bygningen lukkes tæt med endelige vinduer og yderdøre. Nu er råbygningen "vind- og vandtæt".',
+    tip:"Når bygningen er nået hertil, kan indvendigt arbejde begynde uanset vejret.", tipLabel:"Vind- og vandtæt:",
+    steps:["Vinduer og yderdøre monteres og forsegles","Facadefuger og fuge mod eksisterende hus tætnes","Udvendig isolering eller pudset facade påbegyndes","Sokkelpuds og sokkelfarvning"] },
+  { id:8, icon:"🔌", title:"Rå-installationer", workdays:8,
+    desc:"El, VVS og ventilation trækkes ind i konstruktionen, inden væggene lukkes.",
+    steps:["El-rør og kabler trækkes (autoriseret elektriker)","VVS-rør til vand og varme monteres","Gulvvarme-slanger lægges ud i gulvkonstruktion","Ventilationskanaler monteres i loft/vægge","El og vand forberedes til køkkenplacering","Tilslutning til eksisterende hus' installationer"] },
+  { id:9, icon:"🌡️", title:"Isolering & dampspærre", workdays:4,
+    desc:"Indvendig isolering i vægge, loft og gulvkonstruktion monteres, og dampspærre sikrer, at fugten ikke trænger ind.",
+    tip:"Dampspærren er kritisk for et sundt indeklima. Selv små huller kan over tid føre til fugtskader.", tipLabel:"Dampspærren:",
+    steps:["Mineraluld eller PIR-plader i vægfag","Loftisolering monteres","Dampspærrefolie tape-forsegles omhyggeligt","Terrændæk isoleres og undergulv støbes/lægges"] },
+  { id:10, icon:"🪵", title:"Skillevægge & loft", workdays:7,
+    desc:"Indvendige skillevægge opføres i gipsvægge eller murværk, og loftbekledning monteres.",
+    steps:["Stålregler/træskeletter til skillevægge opsættes","Gipsplader skrues på begge sider","Loftplader monteres på systembærere","Spartling af samlinger – første omgang","Evt. indbygningsspot / el-bokse placeres"] },
+  { id:11, icon:"🪜", title:"Overflader: gulv, vægge & loft", workdays:9, dividerBefore:"Køkken & finish",
+    desc:"Den synlige finish udføres. Spartling, maling, fliser og gulv transformerer de rå rum til en færdig bolig.",
+    steps:["Finsparlting og slibning af vægge og loft","Grundmaling + toplag (typisk 2 strøg)","Fliseklæber og fliser bag komfur/vask monteres","Gulvlægning: trægulv, vinyl, klinker eller parket","Fodlister, gerigt og indfatninger monteres"] },
+  { id:12, icon:"🍳", title:"Køkkenmontage", workdays:4,
+    desc:"Køkkenet monteres, når gulv og vægge er færdige. El og VVS skal være forberedt fra fase 8.",
+    tip:"Køkkenet monteres altid efter gulv og maling er færdigt, men fodlister langs køkkenet lægges til sidst.", tipLabel:"Rækkefølge:",
+    steps:["Køkkenelementer leveres og sorteres","Underskabe monteres og nivelleres","Overskabe og høje skabe ophænges","Bordplade tilpasses, skæres og monteres","Vask, vandhane og afløb tilsluttes (autoriseret VVS)","Hvidevarer (ovn, emhætte, opvaskemaskine) monteres","El til komfur og emhætte tilsluttes (autoriseret elektriker)","Stænkplade/fliser bag komfur og vask monteres","Låger, skuffer og greb justeres og monteres"] },
+  { id:13, icon:"✅", title:"Færdigmelding & indflytning", workdays:3, highlight:true,
+    desc:"Tilbygningen færdigmeldes til kommunen. Til sidst slutrengøring og møblering.",
+    tip:"Uden færdigmelding kan du få problemer ved salg af huset.", tipLabel:"Husk:",
+    steps:["Slutbesigtigelse med håndværkere – gennemgang af mangelsliste","El-installatør udsteder elinstallationsattest","VVS-installatør afleverer dokumentation","Færdigmelding til kommunen (BBR opdateres)","Slutrengøring og indflytning 🎉"] },
+];
+
+const FIXED_STARTS = {
+  1: new Date(2025,2,6),
+  2: new Date(2025,2,6),
+  3: new Date(2025,2,11),
+};
+
+function buildInitialChecked() {
+  const obj = {};
+  PHASE_DEFS.forEach(p => p.steps.forEach((_,i) => { obj[`${p.id}-${i}`] = false; }));
+  return obj;
+}
+
+function calcSchedule(actualEnds) {
+  const schedule = {};
+  schedule[1] = { start: FIXED_STARTS[1], end: FIXED_STARTS[1] };
+  let cursor = FIXED_STARTS[2];
+  for (let i = 1; i < PHASE_DEFS.length; i++) {
+    const p = PHASE_DEFS[i];
+    if (!p.workdays) continue;
+    const fixedStart = FIXED_STARTS[p.id];
+    const start = fixedStart ? nextWorkday(fixedStart) : nextWorkday(cursor);
+    if (actualEnds[p.id]) {
+      const actualEnd = parseDate(actualEnds[p.id]);
+      schedule[p.id] = { start, end: actualEnd, isActual: true };
+      cursor = dayAfter(actualEnd);
+    } else {
+      const end = addWorkdays(start, p.workdays);
+      schedule[p.id] = { start, end, isActual: false };
+      cursor = dayAfter(end);
+    }
+  }
+  return schedule;
+}
+
+function loadFromStorage() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch {}
+  return null;
+}
+
+function saveToStorage(data) {
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); } catch {}
+}
+
+function App() {
+  const saved = useMemo(() => loadFromStorage(), []);
+  const [checked, setChecked] = useState(() => ({ ...buildInitialChecked(), ...(saved?.checked || {}) }));
+  const [collapsed, setCollapsed] = useState(() => saved?.collapsed || {});
+  const [actualEnds, setActualEnds] = useState(() => saved?.actualEnds || {});
+
+  const schedule = useMemo(() => calcSchedule(actualEnds), [actualEnds]);
+
+  function persist(c, col, ae) {
+    saveToStorage({ checked: c, collapsed: col, actualEnds: ae });
+  }
+
+  function isAllDone(phaseId) {
+    const p = PHASE_DEFS.find(x => x.id === phaseId);
+    return p.steps.every((_,i) => checked[`${phaseId}-${i}`]);
+  }
+
+  function toggleStep(phaseId, stepIdx) {
+    const key = `${phaseId}-${stepIdx}`;
+    const newChecked = { ...checked, [key]: !checked[key] };
+    const p = PHASE_DEFS.find(x => x.id === phaseId);
+    const allNowDone = p.steps.every((_,i) => newChecked[`${phaseId}-${i}`]);
+    let newCollapsed = { ...collapsed };
+    let newAE = { ...actualEnds };
+
+    if (allNowDone) {
+      if (!newAE[phaseId]) newAE[phaseId] = toInputDate(new Date());
+      setTimeout(() => {
+        setCollapsed(c => { const nc = { ...c, [phaseId]: true }; persist(newChecked, nc, newAE); return nc; });
+      }, 450);
+    } else {
+      newCollapsed[phaseId] = false;
+      setCollapsed(newCollapsed);
+    }
+    setChecked(newChecked);
+    setActualEnds(newAE);
+    persist(newChecked, newCollapsed, newAE);
+  }
+
+  function toggleCollapse(phaseId) {
+    const newCollapsed = { ...collapsed, [phaseId]: !collapsed[phaseId] };
+    setCollapsed(newCollapsed);
+    persist(checked, newCollapsed, actualEnds);
+  }
+
+  function handleActualEndChange(phaseId, val) {
+    const newAE = { ...actualEnds, [phaseId]: val };
+    setActualEnds(newAE);
+    persist(checked, collapsed, newAE);
+  }
+
+  function clearActualEnd(phaseId) {
+    const newAE = { ...actualEnds };
+    delete newAE[phaseId];
+    setActualEnds(newAE);
+    persist(checked, collapsed, newAE);
+  }
+
+  const totalSteps = PHASE_DEFS.reduce((s,p) => s + p.steps.length, 0);
+  const doneSteps = Object.values(checked).filter(Boolean).length;
+  const pct = totalSteps ? Math.round(doneSteps / totalSteps * 100) : 0;
+  const finalEnd = schedule[13]?.end;
+
+  return (
+    <div style={{ fontFamily:"'DM Sans',sans-serif", background:"#FBF7F1", minHeight:"100vh" }}>
+
+      {/* HEADER */}
+      <div style={{ background:"#1E1A16", padding:"48px 32px 44px", position:"relative", overflow:"hidden" }}>
+        <div style={{ position:"absolute", top:-60, right:-60, width:280, height:280, borderRadius:"50%", border:"1px solid rgba(196,146,90,0.25)", pointerEvents:"none" }}/>
+        <div style={{ position:"absolute", bottom:-40, left:"30%", width:160, height:160, borderRadius:"50%", border:"1px solid rgba(196,146,90,0.12)", pointerEvents:"none" }}/>
+        <div style={{ fontSize:10, letterSpacing:4, textTransform:"uppercase", color:"#C4925A", marginBottom:14 }}>Trin-for-trin guide</div>
+        <h1 style={{ fontFamily:"'Playfair Display',serif", fontSize:"clamp(28px,5vw,52px)", fontWeight:900, color:"#F5EFE4", lineHeight:1.05 }}>
+          Fra <span style={{ color:"#C4925A" }}>udgravning</span> til<br/>færdigt rum
+        </h1>
+        <p style={{ marginTop:14, fontSize:13, color:"rgba(245,239,228,0.45)", lineHeight:1.75, maxWidth:460, fontWeight:300 }}>
+          Opstart: <strong style={{ color:"#C4925A" }}>11. marts 2025</strong> · Forventet afslutning: <strong style={{ color:"#C4925A" }}>{finalEnd ? fmtDate(finalEnd) : "–"}</strong><br/>
+          Datoer opdateres automatisk hvis en fase afsluttes til en anden tid end planlagt.
+        </p>
+        <div style={{ marginTop:28, maxWidth:480, position:"relative", zIndex:1 }}>
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"baseline", marginBottom:10 }}>
+            <span style={{ fontSize:10, letterSpacing:3, textTransform:"uppercase", color:"rgba(245,239,228,0.35)" }}>Samlet fremskridt</span>
+            <span style={{ fontFamily:"'Playfair Display',serif", fontSize:24, fontWeight:700, color:"#C4925A" }}>{pct}%</span>
+          </div>
+          <div style={{ height:4, background:"rgba(255,255,255,0.08)", borderRadius:2, overflow:"hidden" }}>
+            <div style={{ height:"100%", width:`${pct}%`, background:"linear-gradient(90deg,#C4925A,#e8b06a)", borderRadius:2, transition:"width 0.5s ease" }}/>
+          </div>
+          <div style={{ fontSize:11, color:"rgba(245,239,228,0.28)", marginTop:7 }}>
+            {doneSteps} af {totalSteps} punkter afkrydset
+            {doneSteps > 0 && <span style={{ color:"rgba(74,140,92,0.7)", marginLeft:8 }}>· Gemt ✓</span>}
+          </div>
+        </div>
+      </div>
+
+      {/* TIMELINE */}
+      <div style={{ maxWidth:860, margin:"0 auto", padding:"44px 20px 80px" }}>
+        <div style={{ position:"relative" }}>
+          <div style={{ position:"absolute", left:34, top:0, bottom:0, width:2, background:"linear-gradient(to bottom,#C4925A,#E8D9C2,transparent)", pointerEvents:"none" }}/>
+
+          {PHASE_DEFS.map((phase, phaseIdx) => {
+            const done = isAllDone(phase.id);
+            const isCollapsed = !!collapsed[phase.id];
+            const sched = schedule[phase.id];
+            const hasActualEnd = !!actualEnds[phase.id];
+
+            let dateLabel = phase.staticDate || "";
+            if (!phase.staticDate && sched) {
+              dateLabel = fmtDate(sched.start) === fmtDate(sched.end)
+                ? fmtDate(sched.start)
+                : `${fmtDate(sched.start)}–${fmtDate(sched.end)}`;
+            }
+
+            return (
+              <div key={phase.id}>
+                {phase.dividerBefore && (
+                  <div style={{ textAlign:"center", padding:"24px 0 8px", marginBottom:8, position:"relative" }}>
+                    <div style={{ height:1, background:"#E8D9C2", marginBottom:-10 }}/>
+                    <span style={{ fontSize:10, letterSpacing:5, textTransform:"uppercase", color:"#C4925A", background:"#FBF7F1", padding:"0 18px", position:"relative" }}>{phase.dividerBefore}</span>
+                  </div>
+                )}
+
+                <div style={{ display:"flex", gap:24, marginBottom:6 }}>
+                  {/* Circle */}
+                  <div style={{ display:"flex", flexDirection:"column", alignItems:"center", flexShrink:0, width:70 }}>
+                    <div style={{
+                      width:40, height:40, borderRadius:"50%", flexShrink:0, zIndex:1, position:"relative",
+                      display:"flex", alignItems:"center", justifyContent:"center",
+                      fontFamily:"'Playfair Display',serif", fontSize: done ? 18 : 14, fontWeight:700,
+                      background: done ? "#4A8C5C" : phase.highlight ? "#C4925A" : "#1E1A16",
+                      border:`2px solid ${done ? "#4A8C5C" : "#C4925A"}`,
+                      color:(done || phase.highlight) ? "white" : "#C4925A",
+                      transition:"all 0.3s",
+                    }}>{done ? "✓" : phase.id}</div>
+                    {phaseIdx < PHASE_DEFS.length - 1 && (
+                      <div style={{ width:2, flex:1, minHeight:16, background: done ? "rgba(74,140,92,0.35)" : "#E8D9C2", margin:"4px 0", transition:"background 0.3s" }}/>
+                    )}
+                  </div>
+
+                  {/* Card */}
+                  <div style={{
+                    flex:1, background: done ? "rgba(74,140,92,0.07)" : "white",
+                    border:`1px solid ${done ? "rgba(74,140,92,0.3)" : "#E8D9C2"}`,
+                    borderRadius:12, padding: isCollapsed ? "16px 22px" : "20px 24px",
+                    marginBottom:10, transition:"all 0.25s",
+                  }}>
+                    {/* Header */}
+                    <div onClick={() => toggleCollapse(phase.id)} style={{ display:"flex", alignItems:"center", gap:10, cursor:"pointer", userSelect:"none", marginBottom: isCollapsed ? 0 : 12, flexWrap:"wrap" }}>
+                      <span style={{ fontSize:19 }}>{phase.icon}</span>
+                      <span style={{ fontFamily:"'Playfair Display',serif", fontSize:17, fontWeight:700, color: done ? "#4A8C5C" : "#1E1A16", transition:"color 0.3s" }}>{phase.title}</span>
+                      {done && <span style={{ fontSize:11, color:"#4A8C5C", background:"rgba(74,140,92,0.12)", padding:"2px 9px", borderRadius:20 }}>✓ Færdig</span>}
+                      <div style={{ marginLeft:"auto", display:"flex", alignItems:"center", gap:6 }}>
+                        {dateLabel && (
+                          <span style={{
+                            fontSize:11, color: hasActualEnd ? "#4A8C5C" : "#C4925A",
+                            background: hasActualEnd ? "rgba(74,140,92,0.1)" : "rgba(196,146,90,0.1)",
+                            padding:"3px 10px", borderRadius:20, whiteSpace:"nowrap", display:"flex", alignItems:"center", gap:4,
+                          }}>
+                            {hasActualEnd && "📅 "}{dateLabel}
+                          </span>
+                        )}
+                        <span style={{ fontSize:11, color:"#C4925A", display:"inline-block", transition:"transform 0.3s", transform: isCollapsed ? "rotate(-90deg)" : "rotate(0deg)" }}>▼</span>
+                      </div>
+                    </div>
+
+                    {/* Body with smooth collapse */}
+                    <div style={{ overflow:"hidden", maxHeight: isCollapsed ? 0 : 1400, opacity: isCollapsed ? 0 : 1, transition:"max-height 0.4s ease, opacity 0.3s ease" }}>
+                      <p style={{ fontSize:13, lineHeight:1.75, color:"#4A3F35", marginBottom:12, fontWeight:300 }}>
+                        {phase.desc}{phase.note && <em style={{ color:"#C4925A" }}> {phase.note}</em>}
+                      </p>
+
+                      {/* Steps */}
+                      <div style={{ display:"flex", flexDirection:"column", gap:2 }}>
+                        {phase.steps.map((step, i) => {
+                          const isChecked = checked[`${phase.id}-${i}`];
+                          return (
+                            <div key={i} onClick={() => toggleStep(phase.id, i)}
+                              style={{ display:"flex", gap:10, alignItems:"flex-start", padding:"5px 7px", borderRadius:7, cursor:"pointer" }}
+                              onMouseEnter={e => e.currentTarget.style.background="rgba(196,146,90,0.07)"}
+                              onMouseLeave={e => e.currentTarget.style.background="transparent"}
+                            >
+                              <div style={{
+                                width:18, height:18, borderRadius:4, flexShrink:0, marginTop:2,
+                                display:"flex", alignItems:"center", justifyContent:"center",
+                                border:`1.5px solid ${isChecked ? "#4A8C5C" : "#C4925A"}`,
+                                background: isChecked ? "#4A8C5C" : "white", transition:"all 0.2s",
+                              }}>
+                                {isChecked && (
+                                  <svg width="10" height="10" viewBox="0 0 12 10" fill="none" stroke="white" strokeWidth="2.5">
+                                    <polyline points="1,5 4.5,8.5 11,1"/>
+                                  </svg>
+                                )}
+                              </div>
+                              <span style={{ fontSize:13, color: isChecked ? "#b0a89e" : "#4A3F35", textDecoration: isChecked ? "line-through" : "none", lineHeight:1.55, fontWeight:300 }}>{step}</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+
+                      {/* Actual end date – shown when phase done */}
+                      {done && phase.workdays && (
+                        <div style={{ marginTop:14, padding:"12px 14px", background:"rgba(74,140,92,0.07)", borderRadius:8, border:"1px solid rgba(74,140,92,0.2)" }}>
+                          <div style={{ fontSize:12, color:"#4A8C5C", marginBottom:8, fontWeight:500 }}>📅 Faktisk slutdato — opdaterer efterfølgende faser</div>
+                          <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
+                            <input type="date" value={actualEnds[phase.id] || ""} onChange={e => handleActualEndChange(phase.id, e.target.value)}
+                              style={{ border:"1px solid rgba(74,140,92,0.4)", borderRadius:6, padding:"6px 10px", fontSize:13, color:"#1E1A16", background:"white", outline:"none", cursor:"pointer" }}/>
+                            {hasActualEnd
+                              ? <button onClick={() => clearActualEnd(phase.id)} style={{ fontSize:12, color:"#999", background:"none", border:"none", cursor:"pointer", padding:"4px 8px" }}>✕ Nulstil</button>
+                              : <span style={{ fontSize:12, color:"#aaa" }}>Bruger beregnet dato</span>
+                            }
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Tip */}
+                      {phase.tip && (
+                        <div style={{ background:"rgba(196,146,90,0.08)", borderLeft:"3px solid #C4925A", borderRadius:"0 8px 8px 0", padding:"10px 14px", marginTop:12, fontSize:13, color:"#8B4A2F", lineHeight:1.6, fontWeight:300 }}>
+                          <strong style={{ fontWeight:500 }}>{phase.tipLabel}</strong> {phase.tip}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      <div style={{ background:"#1E1A16", padding:"26px 32px", textAlign:"center", fontSize:12, color:"rgba(245,239,228,0.3)", fontWeight:300 }}>
+        Tilbygning 39 m² · Opstart 11. marts 2025 · Afkrydsninger gemmes automatisk i din browser
+      </div>
+    </div>
+  );
+}
+
+const root = ReactDOM.createRoot(document.getElementById("root"));
+root.render(<App/>);
+</script>
+</body>
+</html>
