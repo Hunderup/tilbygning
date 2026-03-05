@@ -7,6 +7,15 @@
 <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-database-compat.js"></script>
+<script>
+  firebase.initializeApp({
+    apiKey: "AIzaSyAiPeSZmTig3NmA69tV6ptsvYFikWXMNT8",
+    databaseURL: "https://tilbygning-479a1-default-rtdb.europe-west1.firebasedatabase.app",
+  });
+  const db = firebase.database();
+</script>
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700;900&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -148,28 +157,40 @@ function calcSchedule(actualEnds) {
   return schedule;
 }
 
-function loadFromStorage() {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) return JSON.parse(raw);
-  } catch {}
-  return null;
-}
-
-function saveToStorage(data) {
-  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); } catch {}
+// Firebase save (debounced to avoid hammering on every click)
+let saveTimer = null;
+function saveToFirebase(data) {
+  if (saveTimer) clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    db.ref("tilbygning").set(data).catch(console.error);
+  }, 600);
 }
 
 function App() {
-  const saved = useMemo(() => loadFromStorage(), []);
-  const [checked, setChecked] = useState(() => ({ ...buildInitialChecked(), ...(saved?.checked || {}) }));
-  const [collapsed, setCollapsed] = useState(() => saved?.collapsed || {});
-  const [actualEnds, setActualEnds] = useState(() => saved?.actualEnds || {});
+  const [checked, setChecked] = useState(buildInitialChecked);
+  const [collapsed, setCollapsed] = useState({});
+  const [actualEnds, setActualEnds] = useState({});
+  const [syncStatus, setSyncStatus] = useState("loading"); // loading | ok | error
 
   const schedule = useMemo(() => calcSchedule(actualEnds), [actualEnds]);
 
+  // Load from Firebase on mount + listen for real-time updates
+  useEffect(() => {
+    const ref = db.ref("tilbygning");
+    ref.on("value", snap => {
+      const data = snap.val();
+      if (data) {
+        if (data.checked) setChecked(prev => ({ ...buildInitialChecked(), ...data.checked }));
+        if (data.collapsed) setCollapsed(data.collapsed);
+        if (data.actualEnds) setActualEnds(data.actualEnds);
+      }
+      setSyncStatus("ok");
+    }, () => setSyncStatus("error"));
+    return () => ref.off();
+  }, []);
+
   function persist(c, col, ae) {
-    saveToStorage({ checked: c, collapsed: col, actualEnds: ae });
+    saveToFirebase({ checked: c, collapsed: col, actualEnds: ae });
   }
 
   function isAllDone(phaseId) {
@@ -248,7 +269,9 @@ function App() {
           </div>
           <div style={{ fontSize:11, color:"rgba(245,239,228,0.28)", marginTop:7 }}>
             {doneSteps} af {totalSteps} punkter afkrydset
-            {doneSteps > 0 && <span style={{ color:"rgba(74,140,92,0.7)", marginLeft:8 }}>· Gemt ✓</span>}
+            {syncStatus === "loading" && <span style={{ color:"rgba(196,146,90,0.6)", marginLeft:8 }}>· Henter data…</span>}
+            {syncStatus === "ok" && <span style={{ color:"rgba(74,140,92,0.7)", marginLeft:8 }}>· Synkroniseret ✓</span>}
+            {syncStatus === "error" && <span style={{ color:"#e07060", marginLeft:8 }}>· Kunne ikke forbinde til sky</span>}
           </div>
         </div>
       </div>
@@ -388,7 +411,7 @@ function App() {
       </div>
 
       <div style={{ background:"#1E1A16", padding:"26px 32px", textAlign:"center", fontSize:12, color:"rgba(245,239,228,0.3)", fontWeight:300 }}>
-        Tilbygning 39 m² · Opstart 11. marts 2025 · Afkrydsninger gemmes automatisk i din browser
+        Tilbygning 39 m² · Opstart 11. marts 2025 · Afkrydsninger synkroniseres på tværs af alle enheder via Firebase
       </div>
     </div>
   );
